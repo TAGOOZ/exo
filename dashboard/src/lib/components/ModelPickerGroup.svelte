@@ -21,6 +21,12 @@
     hasMultipleVariants: boolean;
   }
 
+  type DownloadAvailability = {
+    available: boolean;
+    nodeNames: string[];
+    nodeIds: string[];
+  };
+
   type ModelPickerGroupProps = {
     group: ModelGroup;
     isExpanded: boolean;
@@ -31,6 +37,7 @@
     onSelectModel: (modelId: string) => void;
     onToggleFavorite: (baseModelId: string) => void;
     onShowInfo: (group: ModelGroup) => void;
+    downloadStatus?: DownloadAvailability;
   };
 
   let {
@@ -43,6 +50,7 @@
     onSelectModel,
     onToggleFavorite,
     onShowInfo,
+    downloadStatus,
   }: ModelPickerGroupProps = $props();
 
   // Format storage size
@@ -202,6 +210,31 @@
     {#if group.hasMultipleVariants}
       <span class="text-xs font-mono text-white/30 flex-shrink-0">
         {group.variants.length} variants
+      </span>
+    {/if}
+
+    <!-- Download availability indicator -->
+    {#if downloadStatus && downloadStatus.nodeIds.length > 0}
+      <span
+        class="flex-shrink-0"
+        title={downloadStatus.available
+          ? `Ready — downloaded on ${downloadStatus.nodeNames.join(", ")}`
+          : `Downloaded on ${downloadStatus.nodeNames.join(", ")} (may need more nodes)`}
+      >
+        <svg
+          class="w-4 h-4 {downloadStatus.available
+            ? 'text-green-400'
+            : 'text-green-400/40'}"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+          <polyline points="22 4 12 14.01 9 11.01" />
+        </svg>
       </span>
     {/if}
 

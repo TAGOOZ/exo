@@ -5,6 +5,7 @@
   import ModelPickerGroup from "./ModelPickerGroup.svelte";
   import ModelFilterPopover from "./ModelFilterPopover.svelte";
   import HuggingFaceResultItem from "./HuggingFaceResultItem.svelte";
+  import { getNodesWithModelDownloaded } from "$lib/utils/downloads";
 
   interface ModelInfo {
     id: string;
@@ -58,6 +59,15 @@
     onDeleteModel: (modelId: string) => Promise<void>;
     totalMemoryGB: number;
     usedMemoryGB: number;
+    downloadsData?: Record<string, unknown[]>;
+    topologyNodes?: Record<
+      string,
+      {
+        friendly_name?: string;
+        system_info?: { model_id?: string };
+        macmon_info?: { memory?: { ram_total?: number } };
+      }
+    >;
   };
 
   let {
@@ -74,6 +84,8 @@
     onDeleteModel,
     totalMemoryGB,
     usedMemoryGB,
+    downloadsData,
+    topologyNodes,
   }: ModelPickerModalProps = $props();
 
   // Local state
@@ -83,6 +95,56 @@
   let showFilters = $state(false);
   let filters = $state<FilterState>({ capabilities: [], sizeRange: null });
   let infoGroup = $state<ModelGroup | null>(null);
+
+  // Download availability per model group
+  type DownloadAvailability = {
+    available: boolean;
+    nodeNames: string[];
+    nodeIds: string[];
+  };
+
+  function getNodeName(nodeId: string): string {
+    const node = topologyNodes?.[nodeId];
+    return (
+      node?.friendly_name || node?.system_info?.model_id || nodeId.slice(0, 8)
+    );
+  }
+
+  const modelDownloadAvailability = $derived.by(() => {
+    const result = new Map<string, DownloadAvailability>();
+    if (!downloadsData || !topologyNodes) return result;
+
+    for (const model of models) {
+      const nodeIds = getNodesWithModelDownloaded(downloadsData, model.id);
+      if (nodeIds.length === 0) continue;
+
+      // Sum total RAM across nodes that have the model
+      let totalRamBytes = 0;
+      for (const nodeId of nodeIds) {
+        const ramTotal = topologyNodes[nodeId]?.macmon_info?.memory?.ram_total;
+        if (typeof ramTotal === "number") totalRamBytes += ramTotal;
+      }
+
+      const modelSizeBytes = (model.storage_size_megabytes || 0) * 1024 * 1024;
+      result.set(model.id, {
+        available: modelSizeBytes > 0 && totalRamBytes >= modelSizeBytes,
+        nodeNames: nodeIds.map(getNodeName),
+        nodeIds,
+      });
+    }
+    return result;
+  });
+
+  // Aggregate download availability per group (available if ANY variant is available)
+  function getGroupDownloadAvailability(
+    group: ModelGroup,
+  ): DownloadAvailability | undefined {
+    for (const variant of group.variants) {
+      const avail = modelDownloadAvailability.get(variant.id);
+      if (avail && avail.nodeIds.length > 0) return avail;
+    }
+    return undefined;
+  }
 
   // HuggingFace Hub state
   let hfSearchQuery = $state("");
@@ -650,6 +712,7 @@
               onSelectModel={handleSelect}
               {onToggleFavorite}
               onShowInfo={(g) => (infoGroup = g)}
+              downloadStatus={getGroupDownloadAvailability(group)}
             />
           {/each}
         {/if}
@@ -741,6 +804,37 @@
               {/each}
             </div>
           </div>
+        {/if}
+        {#if getGroupDownloadAvailability(infoGroup)?.nodeNames?.length}
+          {@const infoDownload = getGroupDownloadAvailability(infoGroup)}
+          {#if infoDownload}
+            <div class="mt-3 pt-3 border-t border-exo-yellow/10">
+              <div class="flex items-center gap-2 mb-1">
+                <svg
+                  class="w-3.5 h-3.5 text-green-400"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                  <polyline points="22 4 12 14.01 9 11.01" />
+                </svg>
+                <span class="text-white/40">Downloaded on:</span>
+              </div>
+              <div class="flex flex-wrap gap-1 mt-1">
+                {#each infoDownload.nodeNames as nodeName}
+                  <span
+                    class="px-1.5 py-0.5 bg-green-500/10 text-green-400/80 border border-green-500/20 rounded text-[10px]"
+                  >
+                    {nodeName}
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
