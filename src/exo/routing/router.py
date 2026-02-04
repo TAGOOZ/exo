@@ -1,6 +1,7 @@
 from copy import copy
 from itertools import count
 from math import inf
+import os
 from os import PathLike
 from pathlib import Path
 from typing import cast
@@ -101,6 +102,11 @@ class TopicRouter[T: CamelCaseModel]:
 class Router:
     @classmethod
     def create(cls, identity: Keypair) -> "Router":
+        transport = os.getenv("EXO_TRANSPORT", "libp2p").lower()
+        if transport == "http":
+            from exo.routing.http_client import HttpRelayClient
+
+            return cls(handle=HttpRelayClient(identity.to_peer_id().to_base58()))
         return cls(handle=NetworkingHandle(identity))
 
     def __init__(self, handle: NetworkingHandle):

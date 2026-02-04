@@ -140,6 +140,16 @@ from exo.shared.types.worker.shards import Sharding
 from exo.utils.banner import print_startup_banner
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.event_buffer import OrderedBuffer
+from exo.routing.http_relay import (
+    RelayConnectionUpdateResponse,
+    RelayMessageResponse,
+    RelayPublishRequest,
+    RelayRegisterRequest,
+    RelaySubscribeRequest,
+    decode_payload,
+    encode_payload,
+    get_http_relay,
+)
 
 
 def _format_to_content_type(image_format: Literal["png", "jpeg", "webp"] | None) -> str:
@@ -248,6 +258,12 @@ class API:
         )
 
     def _setup_routes(self) -> None:
+        self.app.post("/relay/register")(self.relay_register)
+        self.app.post("/relay/subscribe")(self.relay_subscribe)
+        self.app.post("/relay/unsubscribe")(self.relay_unsubscribe)
+        self.app.post("/relay/publish")(self.relay_publish)
+        self.app.get("/relay/recv")(self.relay_recv)
+        self.app.get("/relay/conn_recv")(self.relay_conn_recv)
         self.app.get("/node_id")(lambda: self.node_id)
         self.app.post("/instance")(self.create_instance)
         self.app.post("/place_instance")(self.place_instance)
@@ -279,6 +295,66 @@ class API:
         self.app.get("/v1/traces/{task_id}")(self.get_trace)
         self.app.get("/v1/traces/{task_id}/stats")(self.get_trace_stats)
         self.app.get("/v1/traces/{task_id}/raw")(self.get_trace_raw)
+
+    async def relay_register(
+        self, payload: RelayRegisterRequest, request: Request
+    ) -> dict[str, str]:
+        remote_ipv4 = request.client.host if request.client else "0.0.0.0"
+        remote_tcp_port = payload.listen_port or 0
+        relay = get_http_relay()
+        await relay.register_node(
+            payload.node_id, remote_ipv4=remote_ipv4, remote_tcp_port=remote_tcp_port
+        )
+        return {"status": "ok"}
+
+    async def relay_subscribe(self, payload: RelaySubscribeRequest) -> dict[str, str]:
+        relay = get_http_relay()
+        try:
+            await relay.subscribe(payload.node_id, payload.topic)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "ok"}
+
+    async def relay_unsubscribe(self, payload: RelaySubscribeRequest) -> dict[str, str]:
+        relay = get_http_relay()
+        try:
+            await relay.unsubscribe(payload.node_id, payload.topic)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "ok"}
+
+    async def relay_publish(self, payload: RelayPublishRequest) -> dict[str, str]:
+        relay = get_http_relay()
+        try:
+            await relay.publish(
+                payload.node_id, payload.topic, decode_payload(payload.data_b64)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "ok"}
+
+    async def relay_recv(self, node_id: NodeId) -> RelayMessageResponse:
+        relay = get_http_relay()
+        try:
+            msg = await relay.recv_message(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RelayMessageResponse(topic=msg.topic, data_b64=encode_payload(msg.data))
+
+    async def relay_conn_recv(
+        self, node_id: NodeId
+    ) -> RelayConnectionUpdateResponse:
+        relay = get_http_relay()
+        try:
+            update = await relay.recv_connection_update(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RelayConnectionUpdateResponse(
+            update_type=update.update_type,
+            peer_id=update.peer_id,
+            remote_ipv4=update.remote_ipv4,
+            remote_tcp_port=update.remote_tcp_port,
+        )
 
     async def place_instance(self, payload: PlaceInstanceParams):
         command = PlaceInstance(
