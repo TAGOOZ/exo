@@ -357,7 +357,11 @@ class Master:
         with self.local_event_receiver as local_events:
             async for local_event in local_events:
                 # Discard all events not from our session
-                if local_event.session != self.session_id:
+                accept_any_session = (
+                    os.getenv("EXO_ACCEPT_ANY_SESSION", "").lower()
+                    in {"1", "true", "yes"}
+                )
+                if not accept_any_session and local_event.session != self.session_id:
                     continue
                 self._multi_buffer.ingest(
                     local_event.origin_idx,
