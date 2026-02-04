@@ -101,29 +101,37 @@ class HttpRelayClient:
     async def gossipsub_recv(self) -> tuple[str, bytes]:
         await self._ensure_registered()
         if self._use_http:
-            resp = await self._client.get(
-                "/relay/recv", params={"node_id": self._node_id}
-            )
-            resp.raise_for_status()
-            message = RelayMessageResponse.model_validate(resp.json())
-            return message.topic, decode_payload(message.data_b64)
+            while True:
+                try:
+                    resp = await self._client.get(
+                        "/relay/recv", params={"node_id": self._node_id}
+                    )
+                    resp.raise_for_status()
+                    message = RelayMessageResponse.model_validate(resp.json())
+                    return message.topic, decode_payload(message.data_b64)
+                except (httpx.HTTPError, RuntimeError):
+                    await anyio.sleep(0.5)
         message = await self._relay.recv_message(self._node_id)
         return message.topic, message.data
 
     async def connection_update_recv(self) -> HttpConnectionUpdate:
         await self._ensure_registered()
         if self._use_http:
-            resp = await self._client.get(
-                "/relay/conn_recv", params={"node_id": self._node_id}
-            )
-            resp.raise_for_status()
-            update = RelayConnectionUpdateResponse.model_validate(resp.json())
-            return HttpConnectionUpdate(
-                update_type=update.update_type,
-                peer_id=update.peer_id,
-                remote_ipv4=update.remote_ipv4,
-                remote_tcp_port=update.remote_tcp_port,
-            )
+            while True:
+                try:
+                    resp = await self._client.get(
+                        "/relay/conn_recv", params={"node_id": self._node_id}
+                    )
+                    resp.raise_for_status()
+                    update = RelayConnectionUpdateResponse.model_validate(resp.json())
+                    return HttpConnectionUpdate(
+                        update_type=update.update_type,
+                        peer_id=update.peer_id,
+                        remote_ipv4=update.remote_ipv4,
+                        remote_tcp_port=update.remote_tcp_port,
+                    )
+                except (httpx.HTTPError, RuntimeError):
+                    await anyio.sleep(0.5)
         update = await self._relay.recv_connection_update(self._node_id)
         return HttpConnectionUpdate(
             update_type=update.update_type,

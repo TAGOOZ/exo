@@ -214,7 +214,12 @@ class Router:
 
     async def _networking_recv(self):
         while True:
-            topic, data = await self._net.gossipsub_recv()
+            try:
+                topic, data = await self._net.gossipsub_recv()
+            except Exception as exc:
+                logger.warning(f"Networking receive failed: {exc}")
+                await anyio.sleep(0.5)
+                continue
             logger.trace(f"Received message on {topic} with payload {data}")
             if topic not in self.topic_routers:
                 logger.warning(f"Received message on unknown or inactive topic {topic}")
@@ -225,7 +230,12 @@ class Router:
 
     async def _networking_recv_connection_messages(self):
         while True:
-            update = await self._net.connection_update_recv()
+            try:
+                update = await self._net.connection_update_recv()
+            except Exception as exc:
+                logger.warning(f"Connection update receive failed: {exc}")
+                await anyio.sleep(0.5)
+                continue
             message = ConnectionMessage.from_update(update)
             logger.trace(
                 f"Received message on connection_messages with payload {message}"
