@@ -50,7 +50,10 @@ class HttpRelayClient:
         if self._registered:
             return
         listen_port = int(os.getenv("EXO_LIBP2P_LISTEN_PORT", "0") or "0")
-        payload = RelayRegisterRequest(node_id=self._node_id, listen_port=listen_port)
+        payload = RelayRegisterRequest(
+            node_id=self._node_id,
+            listen_port=listen_port if listen_port > 0 else None,
+        )
         if not self._use_http:
             await self._relay.register_node(
                 self._node_id, remote_ipv4="127.0.0.1", remote_tcp_port=listen_port
