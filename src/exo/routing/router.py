@@ -13,12 +13,45 @@ from anyio import (
     sleep_forever,
 )
 from anyio.abc import TaskGroup
-from exo_pyo3_bindings import (
-    AllQueuesFullError,
-    Keypair,
-    NetworkingHandle,
-    NoPeersSubscribedToTopicError,
-)
+try:
+    from exo_pyo3_bindings import (
+        AllQueuesFullError,
+        Keypair,
+        NetworkingHandle,
+        NoPeersSubscribedToTopicError,
+    )
+except ModuleNotFoundError:  # Colab or environments without Rust bindings
+    import secrets
+
+    class AllQueuesFullError(Exception):
+        pass
+
+    class NoPeersSubscribedToTopicError(Exception):
+        pass
+
+    class _PeerId:
+        def __init__(self, value: str) -> None:
+            self._value = value
+
+        def to_base58(self) -> str:
+            return self._value
+
+    class Keypair:
+        def __init__(self) -> None:
+            self._peer_id = f"http-{secrets.token_hex(16)}"
+
+        @staticmethod
+        def generate_ed25519() -> "Keypair":
+            return Keypair()
+
+        def to_peer_id(self) -> _PeerId:
+            return _PeerId(self._peer_id)
+
+    class NetworkingHandle:
+        def __init__(self, *_: object, **__: object) -> None:
+            raise RuntimeError(
+                "libp2p bindings not available; set EXO_TRANSPORT=http"
+            )
 from filelock import FileLock
 from loguru import logger
 
