@@ -1,6 +1,24 @@
 from enum import Enum
 
-from exo_pyo3_bindings import ConnectionUpdate, ConnectionUpdateType
+try:
+    from exo_pyo3_bindings import ConnectionUpdate, ConnectionUpdateType
+except ModuleNotFoundError:  # Colab or environments without Rust bindings
+    class ConnectionUpdateType(Enum):
+        Connected = 0
+        Disconnected = 1
+
+    class ConnectionUpdate:  # minimal duck type for HTTP relay mode
+        def __init__(
+            self,
+            peer_id: str,
+            update_type: int,
+            remote_ipv4: str,
+            remote_tcp_port: int,
+        ) -> None:
+            self.peer_id = peer_id
+            self.update_type = update_type
+            self.remote_ipv4 = remote_ipv4
+            self.remote_tcp_port = remote_tcp_port
 
 from exo.shared.types.common import NodeId
 from exo.utils.pydantic_ext import CamelCaseModel
