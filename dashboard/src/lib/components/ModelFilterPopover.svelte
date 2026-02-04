@@ -5,6 +5,7 @@
   interface FilterState {
     capabilities: string[];
     sizeRange: { min: number; max: number } | null;
+    downloadedOnly: boolean;
   }
 
   type ModelFilterPopoverProps = {
@@ -146,6 +147,33 @@
           </button>
         {/each}
       </div>
+    </div>
+
+    <!-- Downloaded only -->
+    <div>
+      <h4 class="text-xs font-mono text-white/50 mb-2">Availability</h4>
+      <button
+        type="button"
+        class="px-2 py-1 text-xs font-mono rounded transition-colors {filters.downloadedOnly
+          ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+          : 'bg-white/5 text-white/60 hover:bg-white/10 border border-transparent'}"
+        onclick={() =>
+          onChange({ ...filters, downloadedOnly: !filters.downloadedOnly })}
+      >
+        <svg
+          class="w-3.5 h-3.5 inline-block"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+          <polyline points="22 4 12 14.01 9 11.01" />
+        </svg>
+        <span class="ml-1">Downloaded</span>
+      </button>
     </div>
 
     <!-- Size range -->
