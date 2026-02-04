@@ -1,9 +1,8 @@
 import time
-from typing import Any, Callable, Generator, cast, get_args
+from typing import Callable, Generator, cast, get_args
 
 import mlx.core as mx
 from mlx_lm.generate import stream_generate
-from mlx_lm.models.cache import trim_prompt_cache
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
@@ -22,7 +21,14 @@ from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
 from exo.worker.engines.mlx import Model
-from exo.worker.engines.mlx.cache import KVPrefixCache, encode_prompt, make_kv_cache
+from exo.worker.engines.mlx.cache import (
+    KVPrefixCache,
+    SSMSnapshot,
+    encode_prompt,
+    has_ssm_caches,
+    make_kv_cache,
+    snapshot_ssm_states,
+)
 from exo.worker.engines.mlx.constants import KV_BITS, KV_GROUP_SIZE, MAX_TOKENS
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
@@ -41,7 +47,8 @@ def prefill(
     sampler: Callable[[mx.array], mx.array],
     prompt_tokens: mx.array,
     cache: KVCacheType,
-) -> tuple[float, int]:
+    capture_ssm_snapshots: bool = False,
+) -> tuple[float, int, list[SSMSnapshot]]:
     """Prefill the KV cache with prompt tokens.
 
     This runs the model over the prompt tokens to populate the cache,
@@ -52,17 +59,20 @@ def prefill(
     """
     num_tokens = len(prompt_tokens)
     if num_tokens == 0:
-        return 0.0, 0
+        return 0.0, 0, []
 
     logger.debug(f"Prefilling {num_tokens} tokens...")
     start_time = time.perf_counter()
+    snapshots: list[SSMSnapshot] = []
 
     def progress_callback(processed: int, total: int) -> None:
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         tok_per_sec = processed / elapsed if elapsed > 0 else 0
         logger.debug(
             f"Prefill progress: {processed}/{total} tokens ({tok_per_sec:.1f} tok/s)"
         )
+        if capture_ssm_snapshots:
+            snapshots.append(snapshot_ssm_states(cache))
 
     # Use max_tokens=1 because max_tokens=0 does not work.
     # We just throw away the generated token - we only care about filling the cache
@@ -79,7 +89,6 @@ def prefill(
         prompt_progress_callback=progress_callback,
     ):
         break  # Stop after first iteration - cache is now filled
-    trim_prompt_cache(cast(list[Any], cache), 1)
 
     elapsed = time.perf_counter() - start_time
     tokens_per_sec = num_tokens / elapsed if elapsed > 0 else 0.0
@@ -87,7 +96,7 @@ def prefill(
         f"Prefill complete: {num_tokens} tokens in {elapsed:.2f}s "
         f"({tokens_per_sec:.1f} tok/s)"
     )
-    return tokens_per_sec, num_tokens
+    return tokens_per_sec, num_tokens, snapshots
 
 
 def warmup_inference(
@@ -167,9 +176,6 @@ def mlx_generate(
     if task.seed is not None:
         mx.random.seed(task.seed)
 
-    # TODO: re-enable prefix caching after testing
-    kv_prefix_cache = None
-
     # Do not use the prefix cache if we are trying to do benchmarks.
     is_bench = task.bench
     if is_bench:
@@ -209,9 +215,16 @@ def mlx_generate(
     max_stop_len = max((len(s) for s in stop_sequences), default=0)
 
     # Prefill cache with all tokens except the last one
-    prefill_tps, prefill_tokens = prefill(
-        model, tokenizer, sampler, prompt_tokens[:-1], caches
+    capture_snapshots = has_ssm_caches(caches) and kv_prefix_cache is not None
+    prefill_tps, prefill_tokens, ssm_snapshots_list = prefill(
+        model,
+        tokenizer,
+        sampler,
+        prompt_tokens[:-1],
+        caches,
+        capture_ssm_snapshots=capture_snapshots,
     )
+    ssm_snapshots: list[SSMSnapshot] | None = ssm_snapshots_list or None
 
     # stream_generate starts from the last token
     last_token = prompt_tokens[-1:]
@@ -299,16 +312,11 @@ def mlx_generate(
                 ),
             )
 
-        yield GenerationResponse(
-            text=text,
-            token=out.token,
-            finish_reason=finish_reason,
-            stats=stats,
-            usage=usage,
-        )
-
         if is_done:
-            # Log generation stats
+            # Update prefix cache BEFORE yielding the final response.
+            # Consumers typically break on finish_reason, which prevents
+            # the generator from resuming — so any code after yield
+            # would never execute.
             generation_elapsed = time.perf_counter() - generation_start_time
             generated_tokens = len(generated_text_parts)
             generation_tps = (
@@ -325,9 +333,25 @@ def mlx_generate(
                     matched_index is not None
                     and prefix_hit_length >= _MIN_PREFIX_HIT_TO_UPDATE
                 ):
-                    kv_prefix_cache.update_kv_cache(matched_index, full_prompt, caches)
+                    kv_prefix_cache.update_kv_cache(
+                        matched_index,
+                        full_prompt,
+                        caches,
+                        ssm_snapshots,
+                        restore_pos=prefix_hit_length,
+                    )
                 else:
-                    kv_prefix_cache.add_kv_cache(full_prompt, caches)
+                    kv_prefix_cache.add_kv_cache(full_prompt, caches, ssm_snapshots)
+
+        yield GenerationResponse(
+            text=text,
+            token=out.token,
+            finish_reason=finish_reason,
+            stats=stats,
+            usage=usage,
+        )
+
+        if is_done:
             break
 
         # Limit accumulated_text to what's needed for stop sequence detection
